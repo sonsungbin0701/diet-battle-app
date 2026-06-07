@@ -11,9 +11,12 @@ import uuid
 # ─────────────────────────────────────────────────────────────────
 SUPABASE_URL = "https://qdjupvyeiqfwrgdxevph.supabase.co"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFkanVwdnllaXFmd3JnZHhldnBoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MjcwNTgsImV4cCI6MjA5NjQwMzA1OH0.0A-JEDucci-hsAY4QSBN5zN7OPTTrx-gksDmBI1NVHU"
-BUCKET_NAME  = "누가바"
+BUCKET_NAME  = "nuga-bar"
 ADMIN_USERNAMES = {"hyoon", "dbsk", "손성빈"}
 VEGGIE_EMOJIS = ["🥦","🥕","🍅","🥑","🍋","🥝","🍇","🥬","🌽","🍓","🫐","🥭"]
+ALL_EMOJIS = ["🥦","🥕","🍅","🥑","🍋","🥝","🍇","🥬","🌽","🍓","🫐","🥭",
+              "🍊","🍎","🍐","🍑","🍒","🍌","🍉","🍈","🍆","🧅","🧄","🌶️",
+              "🥒","🌿","🌱","🎋","🎍","🍀","🌾","🥜","🫘","🫑","🥔","🌰"]
 # ─────────────────────────────────────────────────────────────────
 
 def sb(): return create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -132,9 +135,9 @@ def is_suspended(user):
         return False
     return True
 
-def upload_photo(file, user_id, date):
+def upload_photo(file, user_id, date, idx=0):
     ext = file.name.split(".")[-1]
-    path = f"{user_id}/{date}.{ext}"
+    path = f"{user_id}/{date}_{idx}.{ext}"
     sb().storage.from_(BUCKET_NAME).upload(path, file.read(), {"content-type": file.type, "upsert": "true"})
     url = sb().storage.from_(BUCKET_NAME).get_public_url(path)
     return url
@@ -395,7 +398,34 @@ else:
     # 탭1: 내 페이지
     # ════════════════════════════════════════════════════════
     with tab_my:
-        st.markdown(f'<div style="text-align:center;padding:8px 0 14px"><span style="font-size:2.8rem">{current_user["emoji"]}</span><br><b style="font-size:1.2rem;color:#2d4a1e">{current_user["name"]}</b><br><span style="color:#7a9a5a;font-size:0.78rem">@{current_user["username"]}</span></div>', unsafe_allow_html=True)
+        # 프로필
+        st.markdown(f'<div style="text-align:center;padding:8px 0 10px"><span style="font-size:2.8rem">{current_user["emoji"]}</span><br><b style="font-size:1.2rem;color:#2d4a1e">{current_user["name"]}</b><br><span style="color:#7a9a5a;font-size:0.78rem">@{current_user["username"]}</span></div>', unsafe_allow_html=True)
+
+        # 이모지 변경
+        if "show_emoji_picker" not in st.session_state:
+            st.session_state.show_emoji_picker = False
+
+        ec1, ec2, ec3 = st.columns([2,1,2])
+        with ec2:
+            if st.button("🎨 이모지 변경", use_container_width=True):
+                st.session_state.show_emoji_picker = not st.session_state.show_emoji_picker
+
+        if st.session_state.show_emoji_picker:
+            with st.container(border=True):
+                st.markdown("**프로필 이모지 선택**")
+                # 한 줄에 8개씩 표시
+                rows = [ALL_EMOJIS[i:i+8] for i in range(0, len(ALL_EMOJIS), 8)]
+                for row in rows:
+                    cols = st.columns(len(row))
+                    for j, emoji in enumerate(row):
+                        with cols[j]:
+                            if st.button(emoji, key=f"emoji_{emoji}"):
+                                db_update_user(current_user["id"], {"emoji": emoji})
+                                st.session_state.show_emoji_picker = False
+                                st.success(f"이모지가 {emoji}로 변경됐어요!")
+                                st.rerun()
+
+        st.divider()
 
         # 몸무게
         st.markdown("#### ⚖️ 몸무게")
@@ -464,22 +494,34 @@ else:
                             st.session_state.snack_list.pop(i)
                             st.rerun()
 
-            # 사진 업로드
-            st.markdown("**📸 사진 (선택)**")
-            uploaded = st.file_uploader("사진 업로드", type=["jpg","jpeg","png","webp"],
-                                        label_visibility="collapsed", key="photo_up")
+            # 사진 업로드 (여러 장)
+            st.markdown("**📸 사진 (선택, 여러 장 가능)**")
+            uploaded_files = st.file_uploader("사진 업로드", type=["jpg","jpeg","png","webp"],
+                                              label_visibility="collapsed", key="photo_up",
+                                              accept_multiple_files=True)
+            # 기존 사진 목록 표시
+            existing_photos = []
             if tm and tm.get("photo_url"):
-                st.caption(f"현재 사진: 있음 ✅")
+                try:
+                    existing_photos = json.loads(tm["photo_url"]) if tm["photo_url"].startswith("[") else [tm["photo_url"]]
+                except:
+                    existing_photos = [tm["photo_url"]] if tm["photo_url"] else []
+            if existing_photos:
+                st.caption(f"현재 사진: {len(existing_photos)}장 ✅")
 
             if st.button("💾 식단 저장", type="primary", use_container_width=True, key="save_meal"):
-                photo_url = tm["photo_url"] if tm and tm.get("photo_url") else ""
-                if uploaded:
-                    try:
-                        photo_url = upload_photo(uploaded, current_user["id"], today_str)
-                    except Exception as e:
-                        st.warning(f"사진 업로드 실패: {e}")
+                photo_urls = existing_photos.copy()
+                if uploaded_files:
+                    for idx, f in enumerate(uploaded_files):
+                        try:
+                            url = upload_photo(f, current_user["id"], today_str, len(photo_urls)+idx)
+                            photo_urls.append(url)
+                        except Exception as e:
+                            st.warning(f"사진 업로드 실패: {e}")
+                import json as _json
+                photo_url_str = _json.dumps(photo_urls) if photo_urls else ""
                 db_save_meal(current_user["id"], today_str, bf, lun, din,
-                             st.session_state.snack_list, photo_url)
+                             st.session_state.snack_list, photo_url_str)
                 st.success("✅ 식단 저장 완료!")
                 st.rerun()
 
@@ -516,13 +558,19 @@ else:
                     if lines:
                         st.markdown(f'<div class="meal-box">{"<br>".join(lines)}</div>', unsafe_allow_html=True)
 
-                    # 사진 보기 버튼
+                    # 사진 보기 버튼 (여러 장)
                     if meal.get("photo_url"):
+                        import json as _json
+                        try:
+                            photos = _json.loads(meal["photo_url"]) if meal["photo_url"].startswith("[") else [meal["photo_url"]]
+                        except:
+                            photos = [meal["photo_url"]]
                         photo_key = f"my_photo_{date}"
-                        if st.button("📸 사진 보기", key=photo_key):
+                        if st.button(f"📸 사진 보기 ({len(photos)}장)", key=photo_key):
                             st.session_state.show_photo[photo_key] = not st.session_state.show_photo.get(photo_key, False)
                         if st.session_state.show_photo.get(photo_key, False):
-                            st.image(meal["photo_url"], use_column_width=True)
+                            for p in photos:
+                                st.image(p, use_column_width=True)
 
 
     # ════════════════════════════════════════════════════════
@@ -622,13 +670,19 @@ else:
                             sep = "　|　" if compact else "<br>"
                             st.markdown(f'<div class="{cls}">{sep.join(lines)}</div>', unsafe_allow_html=True)
 
-                        # 사진 보기 버튼
+                        # 사진 보기 버튼 (여러 장)
                         if other_meal.get("photo_url"):
+                            import json as _json
+                            try:
+                                photos = _json.loads(other_meal["photo_url"]) if other_meal["photo_url"].startswith("[") else [other_meal["photo_url"]]
+                            except:
+                                photos = [other_meal["photo_url"]]
                             pk = f"feed_photo_{u['id']}"
-                            if st.button("📸 사진 보기", key=pk):
+                            if st.button(f"📸 사진 보기 ({len(photos)}장)", key=pk):
                                 st.session_state.show_photo[pk] = not st.session_state.show_photo.get(pk,False)
                             if st.session_state.show_photo.get(pk,False):
-                                st.image(other_meal["photo_url"], use_column_width=True)
+                                for p in photos:
+                                    st.image(p, use_column_width=True)
                     else:
                         st.caption("오늘 식단이 아직 없어요.")
 
